@@ -121,11 +121,11 @@ export default function Sidebar() {
           <div className="w-10 h-10 rounded-full bg-[#3a3a3a] flex items-center justify-center text-white font-semibold">
             {loading ? "..." : user ? getInitials(user.name) : "U"}
           </div>
-          <div>
-            <div className="text-white font-medium">
+          <div className="flex-1 min-w-0">
+            <div className="text-white font-medium text-sm truncate">
               {loading ? "Loading..." : user ? user.name : "User"}
             </div>
-            <div className="text-sm text-gray-400">
+            <div className="text-xs text-gray-400 truncate">
               {loading ? "..." : user ? user.email : "email@example.com"}
             </div>
           </div>
@@ -133,7 +133,7 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 p-4">
+      <nav className="flex-1 p-4 overflow-y-auto">
         <ul className="space-y-1">
           {menuItems.map((item) => {
             const Icon = item.icon;
@@ -142,14 +142,14 @@ export default function Sidebar() {
               <li key={item.href}>
                 <Link
                   href={item.href}
-                  className={`flex items-center gap-3 px-4 py-2.5 rounded-lg transition-colors ${
+                  className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${
                     isActive
                       ? "bg-[#2a2a2a] text-white"
                       : "text-gray-400 hover:bg-[#2a2a2a] hover:text-white"
                   }`}
                 >
                   <Icon size={20} />
-                  <span className="font-medium">{item.label}</span>
+                  <span className="font-medium text-sm">{item.label}</span>
                 </Link>
               </li>
             );
@@ -162,32 +162,38 @@ export default function Sidebar() {
         <Link
           href="/public"
           target="_blank"
-          className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg transition-colors"
+          className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg"
         >
-          <ExternalLink size={20} />
-          <span className="font-medium">View public page</span>
+          <ExternalLink size={18} />
+          <span className="font-medium text-sm">View public page</span>
         </Link>
         <button
           onClick={handleCopyPublicLink}
-          className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg transition-colors w-full"
+          className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg w-full"
         >
-          <Copy size={20} />
-          <span className="font-medium">
+          <Copy size={18} className={copied ? "text-green-400" : ""} />
+          <span className="font-medium text-sm">
             {copied ? "Copied!" : "Copy public page link"}
           </span>
         </button>
         <Link
           href="/settings"
-          className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg transition-colors"
+          className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${
+            pathname === "/settings"
+              ? "bg-[#2a2a2a] text-white"
+              : "text-gray-400 hover:bg-[#2a2a2a] hover:text-white"
+          }`}
         >
-          <Settings size={20} />
-          <span className="font-medium">Settings</span>
+          <Settings size={18} />
+          <span className="font-medium text-sm">Settings</span>
         </Link>
       </div>
 
       {/* Copyright */}
-      <div className="p-4 border-t border-[#2a2a2a] text-xs text-gray-500 text-center">
-        © 2026 Calendar Clone
+      <div className="p-4 border-t border-[#2a2a2a]">
+        <p className="text-xs text-gray-500 text-center">
+          © 2026 Calendar Clone
+        </p>
       </div>
     </div>
   );
