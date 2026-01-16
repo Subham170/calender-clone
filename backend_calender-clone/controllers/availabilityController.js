@@ -1,27 +1,38 @@
-import pool from "../database/db.js";
+import Availability from "../models/Availability.js";
+import User from "../models/User.js";
+
 
 // Get availability for default user
 const getAvailability = async (req, res) => {
   try {
-    const userResult = await pool.query('SELECT id, timezone FROM users LIMIT 1');
-    if (userResult.rows.length === 0) {
-      return res.status(500).json({ error: 'No user found' });
+    const defaultUser = await User.findOne().sort({ createdAt: 1 });
+    if (!defaultUser) {
+      return res.status(500).json({ error: "No user found" });
     }
-    const userId = userResult.rows[0].id;
-    const timezone = userResult.rows[0].timezone;
 
-    const result = await pool.query(
-      'SELECT * FROM availability WHERE user_id = $1 ORDER BY day_of_week, start_time',
-      [userId]
-    );
-    
+    const availability = await Availability.find({ user_id: defaultUser._id }).sort({
+      day_of_week: 1,
+      start_time: 1,
+    });
+
+    // Transform to match expected format
+    const formattedAvailability = availability.map((avail) => ({
+      id: avail._id,
+      user_id: avail.user_id,
+      day_of_week: avail.day_of_week,
+      start_time: avail.start_time,
+      end_time: avail.end_time,
+      timezone: avail.timezone,
+      created_at: avail.createdAt,
+    }));
+
     res.json({
-      timezone,
-      availability: result.rows
+      timezone: defaultUser.timezone,
+      availability: formattedAvailability,
     });
   } catch (error) {
-    console.error('Error fetching availability:', error);
-    res.status(500).json({ error: 'Failed to fetch availability' });
+    console.error("Error fetching availability:", error);
+    res.status(500).json({ error: "Failed to fetch availability" });
   }
 };
 
@@ -29,44 +40,58 @@ const getAvailability = async (req, res) => {
 const setAvailability = async (req, res) => {
   try {
     const { availability, timezone } = req.body;
-    
-    const userResult = await pool.query('SELECT id FROM users LIMIT 1');
-    if (userResult.rows.length === 0) {
-      return res.status(500).json({ error: 'No user found' });
+
+    const defaultUser = await User.findOne().sort({ createdAt: 1 });
+    if (!defaultUser) {
+      return res.status(500).json({ error: "No user found" });
     }
-    const userId = userResult.rows[0].id;
 
     // Update user timezone if provided
     if (timezone) {
-      await pool.query('UPDATE users SET timezone = $1 WHERE id = $2', [timezone, userId]);
+      defaultUser.timezone = timezone;
+      await defaultUser.save();
     }
 
     // Delete existing availability
-    await pool.query('DELETE FROM availability WHERE user_id = $1', [userId]);
+    await Availability.deleteMany({ user_id: defaultUser._id });
 
     // Insert new availability slots
     if (availability && availability.length > 0) {
-      for (const slot of availability) {
-        await pool.query(
-          `INSERT INTO availability (user_id, day_of_week, start_time, end_time, timezone)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [userId, slot.day_of_week, slot.start_time, slot.end_time, timezone || 'UTC']
-        );
-      }
+      const availabilityDocs = availability.map((slot) => ({
+        user_id: defaultUser._id,
+        day_of_week: slot.day_of_week,
+        start_time: slot.start_time,
+        end_time: slot.end_time,
+        timezone: timezone || defaultUser.timezone || "UTC",
+      }));
+
+      await Availability.insertMany(availabilityDocs);
     }
 
-    const result = await pool.query(
-      'SELECT * FROM availability WHERE user_id = $1 ORDER BY day_of_week, start_time',
-      [userId]
-    );
+    // Fetch updated availability
+    const updatedAvailability = await Availability.find({ user_id: defaultUser._id }).sort({
+      day_of_week: 1,
+      start_time: 1,
+    });
+
+    // Transform to match expected format
+    const formattedAvailability = updatedAvailability.map((avail) => ({
+      id: avail._id,
+      user_id: avail.user_id,
+      day_of_week: avail.day_of_week,
+      start_time: avail.start_time,
+      end_time: avail.end_time,
+      timezone: avail.timezone,
+      created_at: avail.createdAt,
+    }));
 
     res.json({
-      timezone: timezone || 'UTC',
-      availability: result.rows
+      timezone: timezone || defaultUser.timezone || "UTC",
+      availability: formattedAvailability,
     });
   } catch (error) {
-    console.error('Error setting availability:', error);
-    res.status(500).json({ error: 'Failed to set availability' });
+    console.error("Error setting availability:", error);
+    res.status(500).json({ error: "Failed to set availability" });
   }
 };
 

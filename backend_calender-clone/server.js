@@ -6,6 +6,8 @@ dotenv.config();
 import availabilityRoutes from "./routes/availability.js";
 import bookingsRoutes from "./routes/bookings.js";
 import eventTypesRoutes from "./routes/eventTypes.js";
+import userRoutes from "./routes/user.js";
+import mongoose from "./database/db.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -20,6 +22,16 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// MongoDB connection is handled in db.js
+// Check connection status
+if (mongoose.connection.readyState === 1) {
+  console.log("✅ Connected to MongoDB database");
+} else {
+  mongoose.connection.once("connected", () => {
+    console.log("✅ Connected to MongoDB database");
+  });
+}
+
 // Logging middleware for debugging
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`, req.body);
@@ -30,6 +42,7 @@ app.use((req, res, next) => {
 app.use("/api/event-types", eventTypesRoutes);
 app.use("/api/availability", availabilityRoutes);
 app.use("/api/bookings", bookingsRoutes);
+app.use("/api/user", userRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {

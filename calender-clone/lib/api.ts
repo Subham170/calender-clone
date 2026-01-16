@@ -40,4 +40,11 @@ export const bookingsApi = {
   cancel: (id: number) => api.put(`/bookings/${id}/cancel`),
 };
 
+// User API
+export const userApi = {
+  get: () => api.get('/user'),
+  update: (data: { name?: string; email?: string; timezone?: string }) =>
+    api.put('/user', data),
+};
+
 export default api;

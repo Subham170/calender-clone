@@ -1,31 +1,49 @@
-import pool from "../database/db.js";
+import Booking from "../models/Booking.js";
+import EventType from "../models/EventType.js";
+import User from "../models/User.js";
+import Availability from "../models/Availability.js";
 
 // Get all bookings
 const getAllBookings = async (req, res) => {
   try {
     const { status } = req.query;
-    let query = `
-      SELECT b.*, et.title as event_title, et.duration, et.slug as event_slug
-      FROM bookings b
-      JOIN event_types et ON b.event_type_id = et.id
-    `;
-    const params = [];
-    
-    if (status === 'upcoming') {
-      query += ' WHERE b.start_time > CURRENT_TIMESTAMP AND b.status = $1';
-      params.push('confirmed');
-    } else if (status === 'past') {
-      query += ' WHERE b.start_time < CURRENT_TIMESTAMP OR b.status = $1';
-      params.push('cancelled');
+    const now = new Date();
+
+    let query = {};
+    if (status === "upcoming") {
+      query = {
+        start_time: { $gt: now },
+        status: "confirmed",
+      };
+    } else if (status === "past") {
+      query = {
+        $or: [{ start_time: { $lt: now } }, { status: "cancelled" }],
+      };
     }
-    
-    query += ' ORDER BY b.start_time DESC';
-    
-    const result = await pool.query(query, params);
-    res.json(result.rows);
+
+    const bookings = await Booking.find(query)
+      .populate("event_type_id", "title duration slug")
+      .sort({ start_time: -1 });
+
+    // Transform to match expected format
+    const formattedBookings = bookings.map((booking) => ({
+      id: booking._id,
+      event_type_id: booking.event_type_id._id,
+      event_title: booking.event_type_id.title,
+      duration: booking.event_type_id.duration,
+      event_slug: booking.event_type_id.slug,
+      booker_name: booking.booker_name,
+      booker_email: booking.booker_email,
+      start_time: booking.start_time,
+      end_time: booking.end_time,
+      status: booking.status,
+      created_at: booking.createdAt,
+    }));
+
+    res.json(formattedBookings);
   } catch (error) {
-    console.error('Error fetching bookings:', error);
-    res.status(500).json({ error: 'Failed to fetch bookings' });
+    console.error("Error fetching bookings:", error);
+    res.status(500).json({ error: "Failed to fetch bookings" });
   }
 };
 
@@ -34,35 +52,28 @@ const getAvailableSlots = async (req, res) => {
   try {
     const { slug } = req.params;
     const { date } = req.query; // Format: YYYY-MM-DD
-    
+
     if (!date) {
-      return res.status(400).json({ error: 'Date parameter is required' });
+      return res.status(400).json({ error: "Date parameter is required" });
     }
 
     // Get event type
-    const eventTypeResult = await pool.query(
-      `SELECT et.*, u.timezone as user_timezone
-       FROM event_types et 
-       JOIN users u ON et.user_id = u.id 
-       WHERE et.slug = $1 AND et.is_active = true`,
-      [slug]
-    );
+    const eventType = await EventType.findOne({ slug, is_active: true }).populate("user_id", "timezone");
 
-    if (eventTypeResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Event type not found' });
+    if (!eventType) {
+      return res.status(404).json({ error: "Event type not found" });
     }
 
-    const eventType = eventTypeResult.rows[0];
     const selectedDate = new Date(date);
     const dayOfWeek = selectedDate.getDay();
 
     // Get availability for this day
-    const availabilityResult = await pool.query(
-      'SELECT * FROM availability WHERE day_of_week = $1',
-      [dayOfWeek]
-    );
+    const availability = await Availability.find({
+      user_id: eventType.user_id._id,
+      day_of_week: dayOfWeek,
+    });
 
-    if (availabilityResult.rows.length === 0) {
+    if (availability.length === 0) {
       return res.json({ availableSlots: [] });
     }
 
@@ -72,43 +83,40 @@ const getAvailableSlots = async (req, res) => {
     const endOfDay = new Date(selectedDate);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const bookingsResult = await pool.query(
-      `SELECT start_time FROM bookings 
-       WHERE event_type_id = $1 
-       AND start_time >= $2 
-       AND start_time <= $3 
-       AND status = 'confirmed'`,
-      [eventType.id, startOfDay, endOfDay]
-    );
+    const existingBookings = await Booking.find({
+      event_type_id: eventType._id,
+      start_time: { $gte: startOfDay, $lte: endOfDay },
+      status: "confirmed",
+    });
 
-    const bookedTimes = bookingsResult.rows.map(b => new Date(b.start_time));
+    const bookedTimes = existingBookings.map((b) => new Date(b.start_time));
 
     // Generate available slots
     const availableSlots = [];
-    for (const avail of availabilityResult.rows) {
-      const [startHour, startMin] = avail.start_time.split(':').map(Number);
-      const [endHour, endMin] = avail.end_time.split(':').map(Number);
-      
+    for (const avail of availability) {
+      const [startHour, startMin] = avail.start_time.split(":").map(Number);
+      const [endHour, endMin] = avail.end_time.split(":").map(Number);
+
       const slotStart = new Date(selectedDate);
       slotStart.setHours(startHour, startMin, 0, 0);
-      
+
       const slotEnd = new Date(selectedDate);
       slotEnd.setHours(endHour, endMin, 0, 0);
 
       let currentSlot = new Date(slotStart);
       while (currentSlot.getTime() + eventType.duration * 60000 <= slotEnd.getTime()) {
         const slotEndTime = new Date(currentSlot.getTime() + eventType.duration * 60000);
-        
+
         // Check if this slot is already booked
-        const isBooked = bookedTimes.some(bt => {
+        const isBooked = bookedTimes.some((bt) => {
           const bookingEnd = new Date(bt.getTime() + eventType.duration * 60000);
-          return (currentSlot < bookingEnd && slotEndTime > bt);
+          return currentSlot < bookingEnd && slotEndTime > bt;
         });
 
         if (!isBooked) {
           availableSlots.push({
             start: currentSlot.toISOString(),
-            end: slotEndTime.toISOString()
+            end: slotEndTime.toISOString(),
           });
         }
 
@@ -118,8 +126,8 @@ const getAvailableSlots = async (req, res) => {
 
     res.json({ availableSlots });
   } catch (error) {
-    console.error('Error fetching available slots:', error);
-    res.status(500).json({ error: 'Failed to fetch available slots' });
+    console.error("Error fetching available slots:", error);
+    res.status(500).json({ error: "Failed to fetch available slots" });
   }
 };
 
@@ -130,55 +138,64 @@ const createBooking = async (req, res) => {
     const { booker_name, booker_email, start_time } = req.body;
 
     if (!booker_name || !booker_email || !start_time) {
-      return res.status(400).json({ error: 'Booker name, email, and start time are required' });
+      return res.status(400).json({ error: "Booker name, email, and start time are required" });
     }
 
     // Get event type
-    const eventTypeResult = await pool.query(
-      'SELECT * FROM event_types WHERE slug = $1 AND is_active = true',
-      [slug]
-    );
+    const eventType = await EventType.findOne({ slug, is_active: true });
 
-    if (eventTypeResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Event type not found' });
+    if (!eventType) {
+      return res.status(404).json({ error: "Event type not found" });
     }
 
-    const eventType = eventTypeResult.rows[0];
     const startTime = new Date(start_time);
     const endTime = new Date(startTime.getTime() + eventType.duration * 60000);
 
     // Check if slot is already booked
-    const existingBooking = await pool.query(
-      `SELECT id FROM bookings 
-       WHERE event_type_id = $1 
-       AND start_time = $2 
-       AND status = 'confirmed'`,
-      [eventType.id, startTime]
-    );
+    const existingBooking = await Booking.findOne({
+      event_type_id: eventType._id,
+      start_time: startTime,
+      status: "confirmed",
+    });
 
-    if (existingBooking.rows.length > 0) {
-      return res.status(409).json({ error: 'This time slot is already booked' });
+    if (existingBooking) {
+      return res.status(409).json({ error: "This time slot is already booked" });
     }
 
     // Create booking
-    const result = await pool.query(
-      `INSERT INTO bookings (event_type_id, booker_name, booker_email, start_time, end_time, status)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
-      [eventType.id, booker_name, booker_email, startTime, endTime, 'confirmed']
-    );
-
-    res.status(201).json({
-      ...result.rows[0],
-      event_title: eventType.title,
-      duration: eventType.duration
+    const booking = new Booking({
+      event_type_id: eventType._id,
+      booker_name,
+      booker_email,
+      start_time: startTime,
+      end_time: endTime,
+      status: "confirmed",
     });
+
+    await booking.save();
+
+    // Transform to match expected format
+    const formattedBooking = {
+      id: booking._id,
+      event_type_id: booking.event_type_id,
+      booker_name: booking.booker_name,
+      booker_email: booking.booker_email,
+      start_time: booking.start_time,
+      end_time: booking.end_time,
+      status: booking.status,
+      created_at: booking.createdAt,
+      event_title: eventType.title,
+      duration: eventType.duration,
+    };
+
+    res.status(201).json(formattedBooking);
   } catch (error) {
-    if (error.code === '23505') { // Unique violation
-      return res.status(409).json({ error: 'This time slot is already booked' });
+    if (error.code === 11000) {
+      // Duplicate key error (double booking prevention)
+      return res.status(409).json({ error: "This time slot is already booked" });
     }
-    console.error('Error creating booking:', error);
-    res.status(500).json({ error: 'Failed to create booking' });
+    console.error("Error creating booking:", error);
+    res.status(500).json({ error: "Failed to create booking" });
   }
 };
 
@@ -186,19 +203,29 @@ const createBooking = async (req, res) => {
 const cancelBooking = async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await pool.query(
-      `UPDATE bookings SET status = 'cancelled' WHERE id = $1 RETURNING *`,
-      [id]
-    );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
+    const booking = await Booking.findByIdAndUpdate(id, { status: "cancelled" }, { new: true });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
     }
 
-    res.json(result.rows[0]);
+    // Transform to match expected format
+    const formattedBooking = {
+      id: booking._id,
+      event_type_id: booking.event_type_id,
+      booker_name: booking.booker_name,
+      booker_email: booking.booker_email,
+      start_time: booking.start_time,
+      end_time: booking.end_time,
+      status: booking.status,
+      created_at: booking.createdAt,
+    };
+
+    res.json(formattedBooking);
   } catch (error) {
-    console.error('Error cancelling booking:', error);
-    res.status(500).json({ error: 'Failed to cancel booking' });
+    console.error("Error cancelling booking:", error);
+    res.status(500).json({ error: "Failed to cancel booking" });
   }
 };
 

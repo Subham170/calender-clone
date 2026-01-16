@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { eventTypesApi, bookingsApi } from '@/lib/api';
-import { formatDate, formatTime, generateTimeSlots, isSlotAvailable } from '@/lib/utils';
+import { formatDate, formatTime, formatDateTime, generateTimeSlots, isSlotAvailable } from '@/lib/utils';
 import { Calendar, Clock, User, Mail } from 'lucide-react';
 import { addDays, format, startOfWeek, isSameDay } from 'date-fns';
 

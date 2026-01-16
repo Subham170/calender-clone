@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
@@ -19,6 +20,14 @@ const menuItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyPublicLink = () => {
+    const publicUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    navigator.clipboard.writeText(publicUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="fixed left-0 top-0 h-screen w-64 bg-[#1a1a1a] border-r border-[#2a2a2a] flex flex-col">
@@ -62,16 +71,20 @@ export default function Sidebar() {
 
       {/* Footer Links */}
       <div className="p-4 border-t border-[#2a2a2a] space-y-1">
-        <a
+        <Link
           href="/public"
+          target="_blank"
           className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg transition-colors"
         >
           <ExternalLink size={20} />
           <span className="font-medium">View public page</span>
-        </a>
-        <button className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg transition-colors w-full">
+        </Link>
+        <button 
+          onClick={handleCopyPublicLink}
+          className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg transition-colors w-full"
+        >
           <Copy size={20} />
-          <span className="font-medium">Copy public page link</span>
+          <span className="font-medium">{copied ? 'Copied!' : 'Copy public page link'}</span>
         </button>
         <Link
           href="/settings"
