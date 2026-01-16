@@ -115,7 +115,7 @@ export default function AvailabilityPage() {
     <div className="flex min-h-screen bg-[#0a0a0a]">
       <Sidebar />
       <main className="ml-64 flex-1 p-8">
-        <div className="max-w-4xl">
+        <div className="w-full">
           <div className="mb-8">
             <h1 className="text-3xl font-bold text-white mb-2">Availability</h1>
             <p className="text-gray-400">

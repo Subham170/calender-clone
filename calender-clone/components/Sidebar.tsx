@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const menuItems = [
   { href: "/", icon: Link2, label: "Event types" },
@@ -27,34 +27,65 @@ interface UserData {
 export default function Sidebar() {
   const pathname = usePathname();
   const [copied, setCopied] = useState(false);
-  const [user, setUser] = useState<UserData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<UserData | null>(() => {
+    // Initialize from sessionStorage if available
+    if (typeof window !== "undefined") {
+      const cached = sessionStorage.getItem("sidebar_user");
+      if (cached) {
+        try {
+          return JSON.parse(cached);
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  });
+  const [loading, setLoading] = useState(!user); // Only show loading if we don't have cached data
+  const hasFetchedRef = useRef(false);
 
   useEffect(() => {
-    fetchUser();
+    // Only fetch if we don't have cached data and haven't fetched yet
+    if (!user && !hasFetchedRef.current) {
+      fetchUser();
+      hasFetchedRef.current = true;
+    } else if (user) {
+      // If we have cached data, we're done loading
+      setLoading(false);
+    }
 
     // Listen for user update events from settings page
-    const handleUserUpdate = () => {
-      fetchUser();
+    const handleUserUpdate = (event: CustomEvent) => {
+      // Only update when Settings page dispatches the event with user data
+      if (event.detail) {
+        const updatedUser = event.detail;
+        setUser(updatedUser);
+        // Cache the updated user data
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("sidebar_user", JSON.stringify(updatedUser));
+        }
+      }
     };
 
-    window.addEventListener("userUpdated", handleUserUpdate);
-
-    // Refresh user data periodically
-    const interval = setInterval(() => {
-      fetchUser();
-    }, 30000); // Refresh every 30 seconds
+    window.addEventListener("userUpdated", handleUserUpdate as EventListener);
 
     return () => {
-      clearInterval(interval);
-      window.removeEventListener("userUpdated", handleUserUpdate);
+      window.removeEventListener(
+        "userUpdated",
+        handleUserUpdate as EventListener
+      );
     };
-  }, [pathname]);
+  }, []); // Empty dependency array - only run on mount
 
   const fetchUser = async () => {
     try {
       const response = await userApi.get();
-      setUser(response.data);
+      const userData = response.data;
+      setUser(userData);
+      // Cache the user data in sessionStorage
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("sidebar_user", JSON.stringify(userData));
+      }
     } catch (error) {
       console.error("Error fetching user in sidebar:", error);
     } finally {
