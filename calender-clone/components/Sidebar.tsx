@@ -1,32 +1,85 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { 
-  Link2, 
-  Calendar, 
-  Clock, 
-  ExternalLink, 
+import { userApi } from "@/lib/api";
+import {
+  Calendar,
+  Clock,
   Copy,
-  Settings 
-} from 'lucide-react';
+  ExternalLink,
+  Link2,
+  Settings,
+} from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 const menuItems = [
-  { href: '/', icon: Link2, label: 'Event types' },
-  { href: '/bookings', icon: Calendar, label: 'Bookings' },
-  { href: '/availability', icon: Clock, label: 'Availability' },
+  { href: "/", icon: Link2, label: "Event types" },
+  { href: "/bookings", icon: Calendar, label: "Bookings" },
+  { href: "/availability", icon: Clock, label: "Availability" },
 ];
+
+interface UserData {
+  name: string;
+  email: string;
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
   const [copied, setCopied] = useState(false);
+  const [user, setUser] = useState<UserData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchUser();
+
+    // Listen for user update events from settings page
+    const handleUserUpdate = () => {
+      fetchUser();
+    };
+
+    window.addEventListener("userUpdated", handleUserUpdate);
+
+    // Refresh user data periodically
+    const interval = setInterval(() => {
+      fetchUser();
+    }, 30000); // Refresh every 30 seconds
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("userUpdated", handleUserUpdate);
+    };
+  }, [pathname]);
+
+  const fetchUser = async () => {
+    try {
+      const response = await userApi.get();
+      setUser(response.data);
+    } catch (error) {
+      console.error("Error fetching user in sidebar:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleCopyPublicLink = () => {
-    const publicUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    const publicUrl =
+      typeof window !== "undefined" ? window.location.origin : "";
     navigator.clipboard.writeText(publicUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Get initials for avatar
+  const getInitials = (name: string) => {
+    return (
+      name
+        .split(" ")
+        .map((n) => n[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2) || "U"
+    );
   };
 
   return (
@@ -35,11 +88,15 @@ export default function Sidebar() {
       <div className="p-6 border-b border-[#2a2a2a]">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-[#3a3a3a] flex items-center justify-center text-white font-semibold">
-            A
+            {loading ? "..." : user ? getInitials(user.name) : "U"}
           </div>
           <div>
-            <div className="text-white font-medium">Admin User</div>
-            <div className="text-sm text-gray-400">admin@example.com</div>
+            <div className="text-white font-medium">
+              {loading ? "Loading..." : user ? user.name : "User"}
+            </div>
+            <div className="text-sm text-gray-400">
+              {loading ? "..." : user ? user.email : "email@example.com"}
+            </div>
           </div>
         </div>
       </div>
@@ -56,8 +113,8 @@ export default function Sidebar() {
                   href={item.href}
                   className={`flex items-center gap-3 px-4 py-2.5 rounded-lg transition-colors ${
                     isActive
-                      ? 'bg-[#2a2a2a] text-white'
-                      : 'text-gray-400 hover:bg-[#2a2a2a] hover:text-white'
+                      ? "bg-[#2a2a2a] text-white"
+                      : "text-gray-400 hover:bg-[#2a2a2a] hover:text-white"
                   }`}
                 >
                   <Icon size={20} />
@@ -79,12 +136,14 @@ export default function Sidebar() {
           <ExternalLink size={20} />
           <span className="font-medium">View public page</span>
         </Link>
-        <button 
+        <button
           onClick={handleCopyPublicLink}
           className="flex items-center gap-3 px-4 py-2.5 text-gray-400 hover:bg-[#2a2a2a] hover:text-white rounded-lg transition-colors w-full"
         >
           <Copy size={20} />
-          <span className="font-medium">{copied ? 'Copied!' : 'Copy public page link'}</span>
+          <span className="font-medium">
+            {copied ? "Copied!" : "Copy public page link"}
+          </span>
         </button>
         <Link
           href="/settings"

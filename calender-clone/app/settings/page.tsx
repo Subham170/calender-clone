@@ -72,6 +72,11 @@ export default function SettingsPage() {
       setUser(response.data);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+      
+      // Trigger sidebar refresh by dispatching a custom event
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('userUpdated', { detail: response.data }));
+      }
     } catch (error: any) {
       console.error('Error updating user:', error);
       setError(error.response?.data?.error || 'Failed to update settings');

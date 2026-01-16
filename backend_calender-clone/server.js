@@ -7,7 +7,6 @@ import availabilityRoutes from "./routes/availability.js";
 import bookingsRoutes from "./routes/bookings.js";
 import eventTypesRoutes from "./routes/eventTypes.js";
 import userRoutes from "./routes/user.js";
-import mongoose from "./database/db.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -22,15 +21,8 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// MongoDB connection is handled in db.js
-// Check connection status
-if (mongoose.connection.readyState === 1) {
-  console.log("✅ Connected to MongoDB database");
-} else {
-  mongoose.connection.once("connected", () => {
-    console.log("✅ Connected to MongoDB database");
-  });
-}
+// Supabase connection is handled in db.js
+// Connection status is logged in db.js
 
 // Logging middleware for debugging
 app.use((req, res, next) => {

@@ -1,43 +1,64 @@
-import Booking from "../models/Booking.js";
-import EventType from "../models/EventType.js";
-import User from "../models/User.js";
-import Availability from "../models/Availability.js";
+import supabase from "../database/supabase.js";
 
 // Get all bookings
 const getAllBookings = async (req, res) => {
   try {
     const { status } = req.query;
-    const now = new Date();
+    const now = new Date().toISOString();
 
-    let query = {};
+    let query = supabase
+      .from("bookings")
+      .select(`
+        *,
+        event_types(id, title, duration, slug)
+      `);
+
     if (status === "upcoming") {
-      query = {
-        start_time: { $gt: now },
-        status: "confirmed",
-      };
+      query = query.gt("start_time", now).eq("status", "confirmed");
     } else if (status === "past") {
-      query = {
-        $or: [{ start_time: { $lt: now } }, { status: "cancelled" }],
-      };
+      // For past bookings, get bookings where start_time < now
+      query = query.lt("start_time", now);
     }
 
-    const bookings = await Booking.find(query)
-      .populate("event_type_id", "title duration slug")
-      .sort({ start_time: -1 });
+    const { data: bookings, error } = await query.order("start_time", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    // For past status, also include cancelled bookings
+    let filteredBookings = bookings || [];
+    if (status === "past") {
+      const { data: cancelledBookings } = await supabase
+        .from("bookings")
+        .select(`
+          *,
+          event_types(id, title, duration, slug)
+        `)
+        .eq("status", "cancelled")
+        .order("start_time", { ascending: false });
+      
+      // Merge and deduplicate
+      const bookingIds = new Set((bookings || []).map(b => b.id));
+      const additionalCancelled = (cancelledBookings || []).filter(b => !bookingIds.has(b.id));
+      filteredBookings = [...(bookings || []), ...additionalCancelled].sort((a, b) => 
+        new Date(b.start_time) - new Date(a.start_time)
+      );
+    }
 
     // Transform to match expected format
-    const formattedBookings = bookings.map((booking) => ({
-      id: booking._id,
-      event_type_id: booking.event_type_id._id,
-      event_title: booking.event_type_id.title,
-      duration: booking.event_type_id.duration,
-      event_slug: booking.event_type_id.slug,
+    const formattedBookings = filteredBookings.map((booking) => ({
+      id: booking.id,
+      event_type_id: booking.event_type_id,
+      event_title: booking.event_types.title,
+      duration: booking.event_types.duration,
+      event_slug: booking.event_types.slug,
       booker_name: booking.booker_name,
       booker_email: booking.booker_email,
       start_time: booking.start_time,
       end_time: booking.end_time,
       status: booking.status,
-      created_at: booking.createdAt,
+      created_at: booking.created_at,
     }));
 
     res.json(formattedBookings);
@@ -57,10 +78,18 @@ const getAvailableSlots = async (req, res) => {
       return res.status(400).json({ error: "Date parameter is required" });
     }
 
-    // Get event type
-    const eventType = await EventType.findOne({ slug, is_active: true }).populate("user_id", "timezone");
+    // Get event type with user info
+    const { data: eventType, error: eventTypeError } = await supabase
+      .from("event_types")
+      .select(`
+        *,
+        users!inner(id, timezone)
+      `)
+      .eq("slug", slug)
+      .eq("is_active", true)
+      .single();
 
-    if (!eventType) {
+    if (eventTypeError || !eventType) {
       return res.status(404).json({ error: "Event type not found" });
     }
 
@@ -68,12 +97,17 @@ const getAvailableSlots = async (req, res) => {
     const dayOfWeek = selectedDate.getDay();
 
     // Get availability for this day
-    const availability = await Availability.find({
-      user_id: eventType.user_id._id,
-      day_of_week: dayOfWeek,
-    });
+    const { data: availability, error: availabilityError } = await supabase
+      .from("availability")
+      .select("*")
+      .eq("user_id", eventType.user_id)
+      .eq("day_of_week", dayOfWeek);
 
-    if (availability.length === 0) {
+    if (availabilityError) {
+      throw availabilityError;
+    }
+
+    if (!availability || availability.length === 0) {
       return res.json({ availableSlots: [] });
     }
 
@@ -83,13 +117,19 @@ const getAvailableSlots = async (req, res) => {
     const endOfDay = new Date(selectedDate);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const existingBookings = await Booking.find({
-      event_type_id: eventType._id,
-      start_time: { $gte: startOfDay, $lte: endOfDay },
-      status: "confirmed",
-    });
+    const { data: existingBookings, error: bookingsError } = await supabase
+      .from("bookings")
+      .select("start_time")
+      .eq("event_type_id", eventType.id)
+      .eq("status", "confirmed")
+      .gte("start_time", startOfDay.toISOString())
+      .lte("start_time", endOfDay.toISOString());
 
-    const bookedTimes = existingBookings.map((b) => new Date(b.start_time));
+    if (bookingsError) {
+      throw bookingsError;
+    }
+
+    const bookedTimes = (existingBookings || []).map((b) => new Date(b.start_time));
 
     // Generate available slots
     const availableSlots = [];
@@ -142,9 +182,14 @@ const createBooking = async (req, res) => {
     }
 
     // Get event type
-    const eventType = await EventType.findOne({ slug, is_active: true });
+    const { data: eventType, error: eventTypeError } = await supabase
+      .from("event_types")
+      .select("*")
+      .eq("slug", slug)
+      .eq("is_active", true)
+      .single();
 
-    if (!eventType) {
+    if (eventTypeError || !eventType) {
       return res.status(404).json({ error: "Event type not found" });
     }
 
@@ -152,46 +197,58 @@ const createBooking = async (req, res) => {
     const endTime = new Date(startTime.getTime() + eventType.duration * 60000);
 
     // Check if slot is already booked
-    const existingBooking = await Booking.findOne({
-      event_type_id: eventType._id,
-      start_time: startTime,
-      status: "confirmed",
-    });
+    const { data: existingBooking } = await supabase
+      .from("bookings")
+      .select("id")
+      .eq("event_type_id", eventType.id)
+      .eq("start_time", startTime.toISOString())
+      .eq("status", "confirmed")
+      .single();
 
     if (existingBooking) {
       return res.status(409).json({ error: "This time slot is already booked" });
     }
 
     // Create booking
-    const booking = new Booking({
-      event_type_id: eventType._id,
-      booker_name,
-      booker_email,
-      start_time: startTime,
-      end_time: endTime,
-      status: "confirmed",
-    });
+    const { data: booking, error: createError } = await supabase
+      .from("bookings")
+      .insert({
+        event_type_id: eventType.id,
+        booker_name,
+        booker_email: booker_email.toLowerCase(),
+        start_time: startTime.toISOString(),
+        end_time: endTime.toISOString(),
+        status: "confirmed",
+      })
+      .select()
+      .single();
 
-    await booking.save();
+    if (createError) {
+      if (createError.code === "23505") {
+        // PostgreSQL unique constraint violation (double booking prevention)
+        return res.status(409).json({ error: "This time slot is already booked" });
+      }
+      throw createError;
+    }
 
     // Transform to match expected format
     const formattedBooking = {
-      id: booking._id,
+      id: booking.id,
       event_type_id: booking.event_type_id,
       booker_name: booking.booker_name,
       booker_email: booking.booker_email,
       start_time: booking.start_time,
       end_time: booking.end_time,
       status: booking.status,
-      created_at: booking.createdAt,
+      created_at: booking.created_at,
       event_title: eventType.title,
       duration: eventType.duration,
     };
 
     res.status(201).json(formattedBooking);
   } catch (error) {
-    if (error.code === 11000) {
-      // Duplicate key error (double booking prevention)
+    if (error.code === "23505") {
+      // PostgreSQL unique constraint violation (double booking prevention)
       return res.status(409).json({ error: "This time slot is already booked" });
     }
     console.error("Error creating booking:", error);
@@ -204,22 +261,27 @@ const cancelBooking = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const booking = await Booking.findByIdAndUpdate(id, { status: "cancelled" }, { new: true });
+    const { data: booking, error } = await supabase
+      .from("bookings")
+      .update({ status: "cancelled" })
+      .eq("id", id)
+      .select()
+      .single();
 
-    if (!booking) {
+    if (error || !booking) {
       return res.status(404).json({ error: "Booking not found" });
     }
 
     // Transform to match expected format
     const formattedBooking = {
-      id: booking._id,
+      id: booking.id,
       event_type_id: booking.event_type_id,
       booker_name: booking.booker_name,
       booker_email: booking.booker_email,
       start_time: booking.start_time,
       end_time: booking.end_time,
       status: booking.status,
-      created_at: booking.createdAt,
+      created_at: booking.created_at,
     };
 
     res.json(formattedBooking);

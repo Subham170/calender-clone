@@ -1,33 +1,48 @@
-import Availability from "../models/Availability.js";
-import User from "../models/User.js";
-
+import supabase from "../database/supabase.js";
 
 // Get availability for default user
 const getAvailability = async (req, res) => {
   try {
-    const defaultUser = await User.findOne().sort({ createdAt: 1 });
-    if (!defaultUser) {
+    const { data: users, error: userError } = await supabase
+      .from("users")
+      .select("id")
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!users || users.length === 0) {
       return res.status(500).json({ error: "No user found" });
     }
 
-    const availability = await Availability.find({ user_id: defaultUser._id }).sort({
-      day_of_week: 1,
-      start_time: 1,
-    });
+    const defaultUser = users[0];
 
-    // Transform to match expected format
-    const formattedAvailability = availability.map((avail) => ({
-      id: avail._id,
+    // Get availability for this user
+    const { data: availability, error: availabilityError } = await supabase
+      .from("availability")
+      .select("*")
+      .eq("user_id", defaultUser.id)
+      .order("day_of_week", { ascending: true })
+      .order("start_time", { ascending: true });
+
+    if (availabilityError) {
+      throw availabilityError;
+    }
+
+    // Transform to match expected format (no timezone in schema)
+    const formattedAvailability = (availability || []).map((avail) => ({
+      id: avail.id,
       user_id: avail.user_id,
       day_of_week: avail.day_of_week,
       start_time: avail.start_time,
       end_time: avail.end_time,
-      timezone: avail.timezone,
-      created_at: avail.createdAt,
+      created_at: avail.created_at,
     }));
 
     res.json({
-      timezone: defaultUser.timezone,
+      timezone: "UTC", // Default timezone since it's not in the schema
       availability: formattedAvailability,
     });
   } catch (error) {
@@ -41,57 +56,85 @@ const setAvailability = async (req, res) => {
   try {
     const { availability, timezone } = req.body;
 
-    const defaultUser = await User.findOne().sort({ createdAt: 1 });
-    if (!defaultUser) {
+    const { data: users, error: userError } = await supabase
+      .from("users")
+      .select("id")
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!users || users.length === 0) {
       return res.status(500).json({ error: "No user found" });
     }
 
-    // Update user timezone if provided
-    if (timezone) {
-      defaultUser.timezone = timezone;
-      await defaultUser.save();
-    }
+    const defaultUser = users[0];
 
     // Delete existing availability
-    await Availability.deleteMany({ user_id: defaultUser._id });
+    const { error: deleteError } = await supabase
+      .from("availability")
+      .delete()
+      .eq("user_id", defaultUser.id);
 
-    // Insert new availability slots
+    if (deleteError) {
+      console.error("Error deleting existing availability:", deleteError);
+      throw deleteError;
+    }
+
+    // Insert new availability slots (no timezone column in schema)
     if (availability && availability.length > 0) {
       const availabilityDocs = availability.map((slot) => ({
-        user_id: defaultUser._id,
+        user_id: defaultUser.id,
         day_of_week: slot.day_of_week,
         start_time: slot.start_time,
         end_time: slot.end_time,
-        timezone: timezone || defaultUser.timezone || "UTC",
       }));
 
-      await Availability.insertMany(availabilityDocs);
+      const { error: insertError } = await supabase
+        .from("availability")
+        .insert(availabilityDocs);
+
+      if (insertError) {
+        console.error("Error inserting availability:", insertError);
+        throw insertError;
+      }
     }
 
     // Fetch updated availability
-    const updatedAvailability = await Availability.find({ user_id: defaultUser._id }).sort({
-      day_of_week: 1,
-      start_time: 1,
-    });
+    const { data: updatedAvailability, error: fetchError } = await supabase
+      .from("availability")
+      .select("*")
+      .eq("user_id", defaultUser.id)
+      .order("day_of_week", { ascending: true })
+      .order("start_time", { ascending: true });
 
-    // Transform to match expected format
-    const formattedAvailability = updatedAvailability.map((avail) => ({
-      id: avail._id,
+    if (fetchError) {
+      throw fetchError;
+    }
+
+    // Transform to match expected format (no timezone in schema)
+    const formattedAvailability = (updatedAvailability || []).map((avail) => ({
+      id: avail.id,
       user_id: avail.user_id,
       day_of_week: avail.day_of_week,
       start_time: avail.start_time,
       end_time: avail.end_time,
-      timezone: avail.timezone,
-      created_at: avail.createdAt,
+      created_at: avail.created_at,
     }));
 
     res.json({
-      timezone: timezone || defaultUser.timezone || "UTC",
+      timezone: timezone || "UTC", // Return timezone from request or default
       availability: formattedAvailability,
     });
   } catch (error) {
     console.error("Error setting availability:", error);
-    res.status(500).json({ error: "Failed to set availability" });
+    res.status(500).json({
+      error: "Failed to set availability",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
   }
 };
 

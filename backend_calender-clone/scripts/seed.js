@@ -1,99 +1,72 @@
-import mongoose from "../database/db.js";
-import User from "../models/User.js";
-import EventType from "../models/EventType.js";
-import Availability from "../models/Availability.js";
-import Booking from "../models/Booking.js";
-import bcrypt from "bcryptjs";
+import { randomUUID } from "crypto";
+import supabase from "../database/supabase.js";
 
 async function seedDatabase() {
   try {
-    // Wait for MongoDB connection
-    if (mongoose.connection.readyState !== 1) {
-      await new Promise((resolve) => {
-        mongoose.connection.once("connected", resolve);
-      });
-    }
+    console.log("🌱 Starting database seeding...");
 
-    // Create default admin user
-    const hashedPassword = await bcrypt.hash("admin123", 10);
+    // Check if user already exists
+    const { data: existingUsers } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", "admin@example.com")
+      .limit(1);
 
-    let defaultUser = await User.findOne({ email: "admin@example.com" });
-    if (!defaultUser) {
-      defaultUser = new User({
-        name: "Admin User",
-        email: "admin@example.com",
-        password: hashedPassword,
-        timezone: "America/New_York",
-      });
-      await defaultUser.save();
-      console.log("✅ Default user created:", defaultUser._id);
-    } else {
-      defaultUser.name = "Admin User";
-      defaultUser.timezone = "America/New_York";
-      await defaultUser.save();
-      console.log("✅ Default user updated:", defaultUser._id);
-    }
+    let defaultUser;
 
-    // Create sample event types
-    const eventTypes = [
-      {
-        title: "30 Min Meeting",
-        description: "A quick 30-minute meeting",
-        duration: 30,
-        slug: "30min",
-      },
-      {
-        title: "15 Min Meeting",
-        description: "A brief 15-minute meeting",
-        duration: 15,
-        slug: "15min",
-      },
-      {
-        title: "60 Min Meeting",
-        description: "An hour-long meeting",
-        duration: 60,
-        slug: "60min",
-      },
-    ];
+    if (!existingUsers || existingUsers.length === 0) {
+      // Create new user with UUID
+      const userId = randomUUID();
+      const { data: newUser, error: userError } = await supabase
+        .from("users")
+        .insert({
+          id: userId,
+          name: "Admin User",
+          email: "admin@example.com",
+          role: "user",
+        })
+        .select()
+        .single();
 
-    const eventTypeIds = [];
-    for (const eventTypeData of eventTypes) {
-      let eventType = await EventType.findOne({ slug: eventTypeData.slug });
-      if (!eventType) {
-        eventType = new EventType({
-          user_id: defaultUser._id,
-          ...eventTypeData,
-          is_active: true,
-        });
-        await eventType.save();
-        console.log(`✅ Event type created: ${eventType.title}`);
-      } else {
-        eventType.title = eventTypeData.title;
-        eventType.description = eventTypeData.description;
-        eventType.duration = eventTypeData.duration;
-        await eventType.save();
-        console.log(`✅ Event type updated: ${eventType.title}`);
+      if (userError) {
+        throw userError;
       }
-      eventTypeIds.push(eventType._id);
+      defaultUser = newUser;
+      console.log("✅ Default user created:", defaultUser.id);
+    } else {
+      defaultUser = existingUsers[0];
+      console.log("✅ Using existing admin user:", defaultUser.id);
     }
 
     // Create availability (Monday to Friday, 9 AM to 5 PM)
     // Delete existing availability first
-    await Availability.deleteMany({ user_id: defaultUser._id });
+    const { error: deleteAvailError } = await supabase
+      .from("availability")
+      .delete()
+      .eq("user_id", defaultUser.id);
+
+    if (deleteAvailError) {
+      throw deleteAvailError;
+    }
 
     const availabilitySlots = [];
     for (let day = 1; day <= 5; day++) {
-      // Monday to Friday
+      // Monday to Friday (1 = Monday, 5 = Friday)
       availabilitySlots.push({
-        user_id: defaultUser._id,
+        user_id: defaultUser.id,
         day_of_week: day,
         start_time: "09:00:00",
         end_time: "17:00:00",
-        timezone: "America/New_York",
       });
     }
 
-    await Availability.insertMany(availabilitySlots);
+    const { error: availError } = await supabase
+      .from("availability")
+      .insert(availabilitySlots);
+
+    if (availError) {
+      throw availError;
+    }
     console.log("✅ Availability slots created (Mon-Fri, 9 AM - 5 PM)");
 
     // Create sample bookings
@@ -108,37 +81,62 @@ async function seedDatabase() {
 
     const bookings = [
       {
-        event_type_id: eventTypeIds[0],
-        booker_name: "John Doe",
-        booker_email: "john@example.com",
-        start_time: tomorrow,
-        end_time: new Date(tomorrow.getTime() + 30 * 60000),
+        host_id: defaultUser.id,
+        guest_email: "john@example.com",
+        start_time: tomorrow.toISOString(),
+        end_time: new Date(tomorrow.getTime() + 30 * 60000).toISOString(),
         status: "confirmed",
       },
       {
-        event_type_id: eventTypeIds[1],
-        booker_name: "Jane Smith",
-        booker_email: "jane@example.com",
-        start_time: nextWeek,
-        end_time: new Date(nextWeek.getTime() + 15 * 60000),
+        host_id: defaultUser.id,
+        guest_email: "jane@example.com",
+        start_time: nextWeek.toISOString(),
+        end_time: new Date(nextWeek.getTime() + 60 * 60000).toISOString(),
         status: "confirmed",
       },
     ];
 
-    // Delete existing bookings to avoid duplicates
-    await Booking.deleteMany({});
+    // Delete existing bookings for this host to avoid duplicates
+    const { error: deleteBookingsError } = await supabase
+      .from("bookings")
+      .delete()
+      .eq("host_id", defaultUser.id);
+
+    if (deleteBookingsError) {
+      console.warn(
+        "⚠️ Warning: Could not delete existing bookings:",
+        deleteBookingsError
+      );
+    }
 
     for (const bookingData of bookings) {
       // Check if booking already exists for this time slot
-      const existingBooking = await Booking.findOne({
-        event_type_id: bookingData.event_type_id,
-        start_time: bookingData.start_time,
-      });
+      const { data: existingBooking } = await supabase
+        .from("bookings")
+        .select("id")
+        .eq("host_id", bookingData.host_id)
+        .eq("start_time", bookingData.start_time)
+        .single();
 
       if (!existingBooking) {
-        const booking = new Booking(bookingData);
-        await booking.save();
-        console.log(`✅ Sample booking created: ${booking.booker_name}`);
+        const { data: newBooking, error: bookingError } = await supabase
+          .from("bookings")
+          .insert(bookingData)
+          .select()
+          .single();
+
+        if (bookingError) {
+          console.warn(
+            `⚠️ Could not create booking for ${bookingData.guest_email}:`,
+            bookingError
+          );
+        } else {
+          console.log(
+            `✅ Sample booking created for: ${newBooking.guest_email}`
+          );
+        }
+      } else {
+        console.log(`ℹ️ Booking already exists for ${bookingData.guest_email}`);
       }
     }
 
@@ -151,17 +149,28 @@ async function seedDatabase() {
 
 // Run if executed directly
 import { fileURLToPath } from "url";
+import { testConnection } from "../database/supabase.js";
+
 const __filename = fileURLToPath(import.meta.url);
-const runAsScript = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const runAsScript =
+  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
 if (runAsScript) {
-  seedDatabase()
+  // Test connection first
+  testConnection()
+    .then((connected) => {
+      if (!connected) {
+        console.error("❌ Failed to connect to Supabase");
+        process.exit(1);
+      }
+      return seedDatabase();
+    })
     .then(() => {
-      console.log("Seeding complete");
+      console.log("✅ Seeding complete");
       process.exit(0);
     })
     .catch((error) => {
-      console.error("Seeding failed:", error);
+      console.error("❌ Seeding failed:", error);
       process.exit(1);
     });
 }
